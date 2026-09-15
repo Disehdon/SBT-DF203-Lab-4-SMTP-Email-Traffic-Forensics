@@ -1,6 +1,32 @@
-# SMTP Email Traffic Forensics — Forensic Findings Summary
+# SBT-DF203 · Lab 4 — SMTP Email Traffic Forensics
 
-**Lab:** SBT-DF203 LAB-4 | **Author:** Ibrahim Diseh Garba | **Date:** 12 September 2026
+Forensic analysis of a historical SMTP capture — command reconstruction, offline Base64 decoding, email recovery, and encryption assessment.
+
+---
+
+## Author
+
+| | |
+| :--- | :--- |
+| **Student** | Ibrahim Diseh Garba |
+| **Registration No.** | `2025/FWSD/11521` |
+| **Programme** | Fellowship in Web Application Security & Digital Forensics |
+| **Institution** | International Cybersecurity and Digital Forensics Academy (ICDFA) |
+| **Course** | SBT-DF203 — Basic Networking Skills for Digital Forensics |
+| **Instructor** | Aminu Idris, AMCPN |
+| **Delivery Block** | 2/3 of 3 |
+| **Submission Date** | 15 September 2026 |
+
+---
+## Environment
+
+| Component | Version |
+| :--- | :--- |
+| Operating System | Kali Linux (ICDFA lab VM) |
+| TShark | `4.6.6-1` |
+| Wireshark | `4.6.6-1` |
+| Python | `3.14.6` |
+| Analysis Mode | Offline pcap — no live capture performed |
 
 ---
 
@@ -24,6 +50,38 @@ This document summarizes the key forensic findings from the analysis of a histor
 |------|-----------|------|-------------|-------|
 | **Client (Sender)** | 10.10.1.4 | 1470 | 00:e0:1c:3c:17:c2 | Private RFC 1918 address; last-hop MAC is Cradlepoint router |
 | **Server (Receiver)** | 74.53.140.153 | 25 | 00:1f:33:d9:81:60 | Public IP (ThePlanet.com datacenter, historical ASN); last-hop MAC is Netgear router |
+
+## Methodology
+
+| Phase | Description | Output |
+| :---: | :--- | :--- |
+| 1 | Inventory the capture and locate SMTP streams | `tcp_conversations.txt` · `smtp_packet_inventory.tsv` |
+| 2 | Extract SMTP commands and response codes | `smtp_commands_responses.tsv` |
+| 3 | Decode Base64 authentication parameters offline | `base64_decode_masked.txt` |
+| 4 | Reconstruct the email via Follow TCP Stream | `smtp_stream_0.txt` · `message_headers.txt` |
+| 5 | Extract client, host, and network metadata | `smtp_network_metadata.tsv` · `client_indicators.tsv` |
+| 6 | Assess STARTTLS / TLS and evidential limitations | `tls_assessment.txt` |
+
+---
+
+## Key Findings
+
+| Indicator | Value |
+| :--- | :--- |
+| Session date | 5 October 2009 (02:06:07 – 02:06:16 UTC) |
+| Capture duration | 9.198384 seconds |
+| Total packets | 60 |
+| Client endpoint | `10.10.1.4:1470` |
+| Server endpoint | `74.53.140.153:25` |
+| Server software | Exim 4.69 · `xc90.websitewelcome.com` |
+| Client software | Microsoft Office Outlook 12.0 (from `X-Mailer`) |
+| Authentication | `AUTH LOGIN` with Base64-encoded credentials |
+| Envelope sender | `<gurpartap@patriots.in>` |
+| Envelope recipient | `<raj_deol2002in@yahoo.co.in>` |
+| Message subject | `SMTP` |
+| Message body | `multipart/mixed` (text/plain + text/html + attachment) |
+| Attachment | `NEWS.txt` |
+| Encryption | **Plaintext SMTP on port 25 — no STARTTLS** |
 
 **Key Observation:**  
 The captured MAC addresses are **last-hop router interfaces only**. They do not identify the original email client hardware (NIC) because the capture was taken after Layer-2 routing. To identify the client's hardware, one would need a capture on the client's local network segment.
@@ -339,6 +397,78 @@ Organizations should alert on:
 
 ---
 
+
+
+## Lab Screenshots
+<img width="1280" height="663" alt="Figure 3 1- Lab folder structure created successfully" src="https://github.com/user-attachments/assets/853135eb-eea4-464c-b087-e65359e37a3f" />
+Figure 3 1- Lab folder structure created successfully
+
+---
+
+<img width="1280" height="663" alt="Figure 3 2- Required tools installed and verified" src="https://github.com/user-attachments/assets/1291ae6e-ddf8-4e2f-851e-e0715c1c0f87" />
+Figure 3 2- Required tools installed and verified
+
+---
+
+<img width="1280" height="663" alt="Figure 3 3- smtp pcap file details, capinfos summary, and matching original:working-copy hashes" src="https://github.com/user-attachments/assets/b9b94afd-ee2e-49ad-8672-8da79947a664" />
+Figure 3 3- smtp pcap file details, capinfos summary, and matching original:working-copy hashes
+
+---
+
+<img width="1280" height="663" alt="Figure 4 1- TCP conversation list showing the single SMTP session" src="https://github.com/user-attachments/assets/bc785a35-f69d-4f77-9544-d01948c42b34" />
+Figure 4 1- TCP conversation list showing the single SMTP session
+
+---
+
+<img width="1280" height="663" alt="Figure 4 2- SMTP packet inventory — first and last SMTP frames" src="https://github.com/user-attachments/assets/15e73871-d674-4d0c-9886-037ea0c08052" />
+Figure 4 2- SMTP packet inventory — first and last SMTP frames
+
+---
+
+<img width="1280" height="663" alt="Figure 5 1- SMTP command : response timeline extracted with TShark" src="https://github.com/user-attachments/assets/9daaf690-3d75-42d6-8a97-96bfe1ccf4d0" />
+Figure 5 1- SMTP command : response timeline extracted with TShark
+
+---
+
+<img width="1280" height="663" alt="Figure 5 2- 220 service-ready banner from xc90 websitewelcome com (frame 6) shown in Wireshark&#39;s packet details pane" src="https://github.com/user-attachments/assets/12c93c94-ae1f-4639-949a-47588c971395" />
+Figure 5 2- 220 service-ready banner from xc90 websitewelcome com (frame 6) shown in Wireshark&#39;s packet details pane
+
+---
+
+<img width="1280" height="663" alt="Figure 5 3- EHLO and AUTH LOGIN exchange (frames 7, 9, 10, 11, 12) shown in Wireshark" src="https://github.com/user-attachments/assets/75ad385f-c053-4a9c-865c-698548fc68fc" />
+Figure 5 3- EHLO and AUTH LOGIN exchange (frames 7, 9, 10, 11, 12) shown in Wireshark
+
+---
+
+<img width="1280" height="663" alt="Figure 6 1- Offline Base64 decoding script and masked output" src="https://github.com/user-attachments/assets/dd7a39d9-f912-44af-9c33-0a0a918b5cd0" />
+Figure 6 1- Offline Base64 decoding script and masked output
+
+---
+
+<img width="1280" height="663" alt="Figure 7 1- Follow TCP Stream showing the complete SMTP dialogue and message body" src="https://github.com/user-attachments/assets/f89dbe93-02e7-4502-a5b3-7b0bc5e77831" />
+Figure 7 1- Follow TCP Stream showing the complete SMTP dialogue and message body
+
+---
+
+<img width="1280" height="663" alt="Figure 7 3- Redacted message reconstruction (headers + sanitised body)" src="https://github.com/user-attachments/assets/0a37d2dd-50f1-461a-ae1f-92acb368814a" />
+
+---
+
+<img width="1280" height="663" alt="Figure 8 1- SMTP network metadata — MAC, IP, and port mapping" src="https://github.com/user-attachments/assets/051515df-28ca-4d86-9551-c07a210ecac2" />
+Figure 7 3- Redacted message reconstruction (headers + sanitised body
+
+---
+
+<img width="1280" height="663" alt="Figure 8 2- Wireshark packet details for frame 10 (AUTH LOGIN) showing Ethernet II, IPv4, TCP, and SMTP sections with source and destination MACs" src="https://github.com/user-attachments/assets/1dabf7c1-2dfb-4d6b-8842-1d4843a58181" />
+Figure 8 2- Wireshark packet details for frame 10 (AUTH LOGIN) showing Ethernet II, IPv4, TCP, and SMTP sections with source and destination MACs
+
+---
+
+<img width="1280" height="663" alt="Figure 9 1- TLS:STARTTLS assessment — no TLS handshake observed" src="https://github.com/user-attachments/assets/05d6b648-1d6d-4763-8b26-706ea91955ac" />
+Figure 9 1- TLS:STARTTLS assessment — no TLS handshake observed
+
+---
+
 ## 13. Conclusion
 
 This SMTP email capture demonstrates the forensic value and risks of plaintext email transmission. In the absence of encryption:
@@ -354,7 +484,11 @@ Always verify encryption status by examining the packet stream, not the port num
 
 ---
 
-**Report Generated:** 12 September 2026  
+**Report Generated:** 15 September 2026  
 **Course:** SBT-DF203 — Basic Networking Skills for Digital Forensics  
 **Institution:** International Cybersecurity and Digital Forensics Academy (ICDFA)  
 **Author:** Ibrahim Diseh Garba (2025/FWSD/11521)
+
+
+
+
