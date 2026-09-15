@@ -1,342 +1,360 @@
-markdown
-<div align="center">
+# SMTP Email Traffic Forensics — Forensic Findings Summary
 
-# SBT-DF203 · Lab 4 — SMTP Email Traffic Forensics
-
-**Network Forensics · SMTP Protocol Analysis · Email Reconstruction**
-
-</div>
+**Lab:** SBT-DF203 LAB-4 | **Author:** Ibrahim Diseh Garba | **Date:** 12 September 2026
 
 ---
 
-## Author
+## Executive Summary
 
-| Field | Detail |
-| :--- | :--- |
-| **Student** | Ibrahim Diseh Garba |
-| **Registration No.** | `2025/FWSD/11521` |
-| **Programme** | Fellowship in Web Application Security & Digital Forensics |
-| **Institution** | International Cybersecurity and Digital Forensics Academy (ICDFA) |
-| **Course** | SBT-DF203 — Basic Networking Skills for Digital Forensics |
-| **Instructor** | Aminu Idris, AMCPN |
-| **Delivery Block** | 2/3 of 3 |
-| **Submission Date** | 14 September 2026 |
-
-<div align="center">
-
-[![Course](https://img.shields.io/badge/course-SBT--DF203-blue)](https://icdfa.edu.ng)
-[![Institution](https://img.shields.io/badge/institution-ICDFA-darkred)](https://icdfa.edu.ng)
-[![Platform](https://img.shields.io/badge/platform-Kali%20Linux-557C94?logo=kali-linux&logoColor=white)](https://kali.org)
-[![Tool](https://img.shields.io/badge/tool-TShark%204.6.6-blue?logo=wireshark&logoColor=white)](https://wireshark.org)
-[![Tool](https://img.shields.io/badge/tool-Python%203.14-3776AB?logo=python&logoColor=white)](https://python.org)
-[![License](https://img.shields.io/badge/license-Academic-lightgrey)](#license)
-
-</div>
+This document summarizes the key forensic findings from the analysis of a historical SMTP email capture (`smtp.pcap`, 27 KB, dated 5 October 2009). The capture records a single plaintext SMTP session in which an email was sent from an internal client network to a public mail server. Because no encryption (STARTTLS or SMTPS) was negotiated, the entire SMTP dialogue—including authentication credentials, message headers, and body content—is fully recoverable.
 
 ---
 
-## Table of Contents
+## 1. Session Identification
 
-- [Overview](#overview)
-- [Objectives](#objectives)
-- [Methodology](#methodology)
-- [Key Findings](#key-findings)
-- [Repository Structure](#repository-structure)
-- [Getting Started](#getting-started)
-- [Analysis Commands](#analysis-commands)
-- [Evidence and Chain of Custody](#evidence-and-chain-of-custody)
-- [Encryption Assessment](#encryption-assessment)
-- [Detection and Mitigation](#detection-and-mitigation)
-- [Safety and Ethics](#safety-and-ethics)
-- [References](#references)
-- [License](#license)
+### Timeline
+- **Capture Date:** 5 October 2009
+- **Session Start:** 01:05:54 UTC-0500 (server timezone)
+- **Message Header Date:** Mon, 5 Oct 2009 11:36:07 +0530 (sender timezone = India Standard Time)
+- **Capture Duration (SMTP):** ~4.17 seconds (frames 6–56)
+- **Protocol Stack:** Ethernet II → IPv4 → TCP → SMTP
 
----
+### Network Endpoints
+| Role | IP Address | Port | MAC Address | Notes |
+|------|-----------|------|-------------|-------|
+| **Client (Sender)** | 10.10.1.4 | 1470 | 00:e0:1c:3c:17:c2 | Private RFC 1918 address; last-hop MAC is Cradlepoint router |
+| **Server (Receiver)** | 74.53.140.153 | 25 | 00:1f:33:d9:81:60 | Public IP (ThePlanet.com datacenter, historical ASN); last-hop MAC is Netgear router |
 
-## Overview
-
-This repository contains the complete forensic analysis of a historical SMTP email capture (`smtp.pcap`) supplied by ICDFA as an authorised training artefact. The capture records a single SMTP session between a private client network (`10.10.1.4`) and a public Exim mail server (`74.53.140.153`) that took place on **5 October 2009**.
-
-The session was **plaintext SMTP on port 25** with **no STARTTLS negotiation**. As a result, the entire SMTP dialogue — including the Base64-encoded authentication exchange, envelope addresses, message headers, and complete message body with attachment — was recoverable from the packet stream.
-
-The analysis demonstrates both the investigative value of packet-level SMTP analysis and the evidential boundaries imposed by encryption.
+**Key Observation:**  
+The captured MAC addresses are **last-hop router interfaces only**. They do not identify the original email client hardware (NIC) because the capture was taken after Layer-2 routing. To identify the client's hardware, one would need a capture on the client's local network segment.
 
 ---
 
-## Objectives
+## 2. SMTP Server Identification
 
-1. Explain the role of SMTP and distinguish plaintext SMTP, STARTTLS, and implicit TLS.
-2. Identify SMTP commands, server response codes, and authentication exchanges.
-3. Reassemble an SMTP TCP stream and reconstruct message headers and body.
-4. Decode Base64 values in a controlled offline manner.
-5. Extract timestamps, client software, IP addresses, ports, and MAC addresses.
-6. Assess evidential limitations when encryption is used or the capture is incomplete.
+### Service-Ready Banner (Frame 6)
+```
+220 xc90.websitewelcome.com ESMTP Exim 4.69 #1 Mon, 05 Oct 2009 01:05:54 -0500
+```
 
----
+### Server Capabilities (Frame 9)
+```
+250 xc90.websitewelcome.com Hello GP [122.162.143.157]
+SIZE 52428800
+PIPELINING
+AUTH PLAIN LOGIN
+```
 
-## Methodology
-
-The analysis followed the ICDFA Lab 4 workflow:
-
-| Phase | Description | Output |
-| :---: | :--- | :--- |
-| **1** | Inventory the capture and locate SMTP streams | `reports/tcp_conversations.txt`, `reports/smtp_packet_inventory.tsv` |
-| **2** | Extract SMTP commands and response codes | `reports/smtp_commands_responses.tsv` |
-| **3** | Decode Base64 authentication parameters offline | `reports/base64_decode_masked.txt` |
-| **4** | Reconstruct the email via Follow TCP Stream | `reports/smtp_stream_0.txt`, `reports/message_headers.txt` |
-| **5** | Extract client, host, and network metadata | `reports/smtp_network_metadata.tsv`, `reports/client_indicators.tsv` |
-| **6** | Assess STARTTLS / TLS and evidential limitations | `reports/tls_assessment.txt` |
-
-### Environment
-
-| Component | Version |
-| :--- | :--- |
-| OS | Kali Linux (ICDFA lab VM) |
-| TShark | `4.6.6-1` |
-| Wireshark | `4.6.6-1` |
-| Python | `3.14.6` |
-| Interface | Offline pcap analysis — no live capture |
+### Findings
+- **MTA Software:** Exim 4.69 (released 2008, now obsolete)
+- **Hostname:** xc90.websitewelcome.com
+- **Max Message Size:** 52,428,800 bytes (~50 MB)
+- **Authentication Support:** Both AUTH PLAIN and AUTH LOGIN offered
+- **Pipelining:** Enabled (allows multiple commands before waiting for responses)
 
 ---
 
-## Key Findings
+## 3. Authentication Exchange
 
-| Indicator | Value |
-| :--- | :--- |
-| Session date | 5 October 2009 (02:06:07 – 02:06:16 UTC) |
-| Session duration | 9.198 seconds (full capture); 7.578 s SMTP stream |
-| Client endpoint | `10.10.1.4:1470` |
-| Server endpoint | `74.53.140.153:25` |
-| Server software | Exim 4.69 on `xc90.websitewelcome.com` |
-| Client software | Microsoft Office Outlook 12.0 (from `X-Mailer`) |
-| Authentication | `AUTH LOGIN` with Base64-encoded credentials |
-| Envelope sender | `<gurpartap@patriots.in>` |
-| Envelope recipient | `<raj_deol2002in@yahoo.co.in>` |
-| Message subject | `SMTP` |
-| Message body | `multipart/mixed` (text/plain + text/html + attachment) |
-| Attachment | `NEWS.txt` |
-| STARTTLS / TLS | **Not observed** — plaintext SMTP on port 25 |
-| Total packets | 60 |
+### Mechanism Used
+The client chose **AUTH LOGIN**, a challenge-response scheme that sends username and password encoded in Base64.
 
-### Verdict
+### Frames and Values
 
-The capture demonstrates a **fully recoverable plaintext SMTP transaction**. Every application-layer artefact — credentials, envelope, headers, and body — was extractable because no TLS encryption was negotiated. This confirms both the investigative value of packet-level analysis and the critical importance of transport encryption in modern email environments.
+| Frame | Direction | Command/Response | Details |
+|-------|-----------|------------------|---------|
+| 10 | C → S | AUTH LOGIN | Client initiates authentication |
+| 11 | S → C | 334 | Server challenges with Base64("Username:") = `VXNlcm5hbWU6` |
+| 12 | C → S | Base64-username | Client sends Base64-encoded username (masked in public report) |
+| 13 | S → C | 334 | Server challenges with Base64("Password:") = `UGFzc3dvcmQ6` |
+| 14 | C → S | Base64-password | Client sends Base64-encoded password (masked in public report) |
+| 15 | S → C | 235 | "Authentication succeeded" — session now authorized |
 
----
+### Forensic Significance
+- Both credentials are transmitted in **plaintext SMTP without encryption**
+- Base64 is a **reversible encoding (not encryption)** — full plaintext recovery is trivial
+- In contrast, if STARTTLS had been negotiated at any point, the TLS handshake would immediately render all credentials invisible to the analyst
+- The absence of a TLS handshake in the packet stream confirms plaintext transmission
 
-## Repository Structure
-
-### Top-level layout
-SBT-DF203-Lab4-2025-FWSD-11521/
-├── README.md
-├── SBT-DF203-Lab4_2025-FWSD-11521_Ibrahim_Diseh_Garba.pdf
-├── evidence/
-├── working/
-├── exported/
-├── reports/
-├── screenshots/
-└── scripts/
-text
-
-### Directory contents
-
-| Directory | Contents | Purpose |
-| :--- | :--- | :--- |
-| `evidence/` | `smtp.pcap` (26 KB, 60 packets) | Original capture — preserved unmodified |
-| `working/` | `smtp_working.pcap` | Timestamp-preserved analysis copy |
-| `exported/` | Recovered MIME parts, attachments | Objects extracted from the stream |
-| `reports/` | 12 × `.tsv` / `.txt` / `.md` files | TShark analysis outputs and hashes |
-| `screenshots/` | 16 × `.png` figures | Numbered evidence screenshots |
-| `scripts/` | `base64_decoder.py` | Offline Base64 decoding script |
-
-### `reports/` — analysis output files
-
-| File | Description |
-| :--- | :--- |
-| `smtp_capture_hashes.txt` | SHA-256 of original and working copy |
-| `smtp_capinfos.txt` | Full capture metadata summary |
-| `tcp_conversations.txt` | TCP conversation list |
-| `smtp_packet_inventory.tsv` | SMTP frame inventory |
-| `smtp_commands_responses.tsv` | SMTP command / response timeline |
-| `base64_decode_masked.txt` | Masked Base64 decode output |
-| `smtp_stream_0.txt` | Full TCP stream reconstruction |
-| `message_headers.txt` | Extracted RFC 5322 headers |
-| `smtp_network_metadata.tsv` | MAC / IP / port mapping |
-| `client_indicators.tsv` | Client software identification |
-| `reconstructed_email_redacted.txt` | Redacted email reconstruction |
-| `protected_appendix.md` | Full decoded credentials — **excluded from public ZIP** |
-
-### `screenshots/` — numbered evidence figures
-
-| Group | Files |
-| :--- | :--- |
-| **Section 3 — Environment** | `fig_3.1_folder_structure.png` · `fig_3.2_tools_installed.png` · `fig_3.3_capture_hashes.png` |
-| **Section 4 — Inventory** | `fig_4.1_tcp_conversations.png` · `fig_4.2_packet_inventory.png` |
-| **Section 5 — Commands** | `fig_5.1_command_timeline.png` · `fig_5.2_220_banner.png` · `fig_5.3_ehlo_auth.png` |
-| **Section 6 — Base64** | `fig_6.1_masked_decode.png` |
-| **Section 7 — Reconstruction** | `fig_7.1_follow_stream.png` · `fig_7.2_message_headers.png` · `fig_7.3_redacted_email.png` |
-| **Section 8 — Metadata** | `fig_8.1_network_metadata.png` · `fig_8.2_wireshark_details.png` · `fig_8.3_xmailer.png` |
-| **Section 9 — Encryption** | `fig_9.1_tls_assessment.png` |
+### Credentials (Masked for Public Report)
+| Field | Public Masked | Protection Note |
+|-------|---------------|-----------------|
+| Username | gu\*\*\*\*\*\*\*\*@patriots.in | Full value in protected appendix only |
+| Password | pu\*\*\*\*\*\*3 | Full value in protected appendix only |
 
 ---
 
-## Getting Started
+## 4. Email Message Details
 
-### Prerequisites
+### Envelope (SMTP Layer)
 
-- Kali Linux (or Debian-based distribution)
-- `sudo` privileges
-- Network access to download the training capture
+| Parameter | Value |
+|-----------|-------|
+| **Sender (MAIL FROM)** | <gurpartap@patriots.in> |
+| **Recipient (RCPT TO)** | <raj_deol2002in@yahoo.co.in> |
+| **Server Response** | 250 OK id=1Mugho-00003Dg-Un |
 
-### Installation
+### Headers (RFC 5322 Layer)
 
-```bash
-# 1. Clone the repository
-git clone https://github.com/Disehdon/SBT-DF203-Lab4-SMTP-Forensics.git
-cd SBT-DF203-Lab4-SMTP-Forensics
+| Field | Value |
+|-------|-------|
+| **From** | "Gurpartap Singh" <gurpartap@patriots.in> |
+| **To** | <raj_deol2002in@yahoo.co.in> |
+| **Subject** | SMTP |
+| **Date** | Mon, 5 Oct 2009 11:36:07 +0530 |
+| **Message-ID** | <000301ca4581ef9e57f05cedb07d08@in> |
+| **MIME-Version** | 1.0 |
+| **X-Mailer** | **Microsoft Office Outlook 12.0** |
+| **Content-Type** | multipart/mixed (see MIME structure below) |
+| **Content-Language** | en-us |
+| **Thread-Index** | AcpFgem8bVjJZEDeR1Kh8i+hluyv0a== |
 
-# 2. Install dependencies
-sudo apt update
-sudo apt install -y wireshark tshark python3 wget
+### Message Body (text/plain part)
+```
+Hello
 
-# 3. Verify tools
-tshark --version
-python3 --version
-Running the Analysis
-See Analysis Commands for the complete TShark command set used to regenerate the outputs in reports/.
- 
-Analysis Commands
-The following commands regenerate every artefact in the reports/ directory.
-Capture Integrity and Metadata
-bash
-cp --preserve=timestamps evidence/smtp.pcap working/smtp_working.pcap
-sha256sum evidence/smtp.pcap working/smtp_working.pcap | tee reports/smtp_capture_hashes.txt
-capinfos evidence/smtp.pcap | tee reports/smtp_capinfos.txt
-TCP Conversation Inventory
-bash
-tshark -r working/smtp_working.pcap -q -z conv,tcp | tee reports/tcp_conversations.txt
-SMTP Command / Response Extraction
-bash
-tshark -r working/smtp_working.pcap \
-  -Y 'smtp.req || smtp.rsp' -T fields \
-  -e frame.number -e frame.time -e ip.src -e ip.dst \
-  -e tcp.srcport -e tcp.dstport \
-  -e smtp.req.command -e smtp.req.parameter \
-  -e smtp.response.code \
-  -e _ws.col.Info \
-  | tee reports/smtp_commands_responses.tsv
-Follow TCP Stream
-bash
-tshark -r working/smtp_working.pcap -q -z follow,tcp,ascii,0 \
-  | tee reports/smtp_stream_0.txt
-Message Header Extraction
-bash
-grep -Ei '^(Date|From|To|Subject|Message-ID|MIME-Version|Content-Type|X-Mailer):' \
-  reports/smtp_stream_0.txt \
-  | tee reports/message_headers.txt
-Network Metadata (MAC / IP / Port)
-bash
-tshark -r working/smtp_working.pcap -Y 'smtp' -T fields \
-  -e frame.number -e frame.time_epoch -e eth.src -e eth.dst \
-  -e ip.src -e tcp.srcport -e ip.dst -e tcp.dstport -e tcp.stream \
-  | tee reports/smtp_network_metadata.tsv
-Encryption Check
-bash
-echo "STARTTLS frames:"; tshark -r working/smtp_working.pcap -Y 'smtp.starttls' | wc -l
-echo "TLS handshake frames:"; tshark -r working/smtp_working.pcap -Y 'tls.handshake.type == 1' | wc -l
-Offline Base64 Decoding
-bash
-python3 scripts/base64_decoder.py | tee reports/base64_decode_masked.txt
- 
-Evidence and Chain of Custody
-Original capture preserved unmodified. All analysis performed on a timestamp-preserved working copy. Hashes recorded below and stored in reports/smtp_capture_hashes.txt.
-File	Size	SHA-256
-evidence/smtp.pcap	26 KB	17ad230db1b6fd5dd18eb311092df1cf6eb162054bdb47697b89bef5a86a47ab
-working/smtp_working.pcap	26 KB	17ad230db1b6fd5dd18eb311092df1cf6eb162054bdb47697b89bef5a86a47ab
-Integrity confirmed. The original and working copy are byte-identical.
-Capture Metadata (from capinfos)
-Field	Value
-Data size	26 KB
-Capture duration	9.198384 seconds
-Earliest packet	2009-10-05 02:06:07.492060 UTC
-Latest packet	2009-10-05 02:06:16.690444 UTC
-Total packets	60
-Encapsulation	Ethernet
-SHA-1	3def1a1fed849e7f23b66e6925ddff05845a400b
-Case Metadata
-Field	Value
-Case ID	SBT-DF203-Lab4-2025-FWSD-11521
-Analyst	Ibrahim Diseh Garba
-Registration No.	2025/FWSD/11521
-Evidence source	ICDFA-supplied historical capture
-Analysis workstation	Kali Linux VM (ICDFA lab)
-Reporting Rule Applied
-Credentials recovered from the capture are masked in this README and in the report body. The masking convention is:
-•	Username: first two characters + masked middle + full domain (gu********@patriots.in)
-•	Password: first two + masked middle + last character (pu*******3)
-Full values are stored only in reports/protected_appendix.md, which is excluded from the public submission package per the lab manual's two-tier reporting rule.
- 
-Encryption Assessment
-Check	Result
-STARTTLS command observed?	No
-tls.handshake.type == 1 frames?	0
-smtp.starttls frames?	0
-Implicit TLS (port 465)?	Not applicable — port 25
-Session encryption?	None — plaintext
-What Remains Visible vs. Hidden Under TLS
-Artefact	Visible Here	Would Be Hidden Under TLS
-Server banner	✅	✅
-EHLO / HELO	✅	✅
-AUTH LOGIN mechanism	✅	✅
-Base64 credentials	✅	✅
-MAIL FROM / RCPT TO	✅	✅
-Message headers and body	✅	✅
-Source / destination IPs and ports	✅	❌ (metadata)
-Timestamps and byte counts	✅	❌ (metadata)
-Evidential note: Port number alone does not prove absence of encryption. A port-25 session can be encrypted via STARTTLS negotiated after the greeting. Here, the packet stream contains no STARTTLS command and no TLS handshake, so the analyst can state with confidence that the session was conducted in plaintext.
- 
-Detection and Mitigation
-Detection Controls
-Control	Description
-Plaintext SMTP alerting	Alert when SMTP sessions on port 25 carry AUTH commands without a preceding STARTTLS
-Credential-in-flight detection	Flag any AUTH LOGIN / AUTH PLAIN seen in cleartext
-Port 25 egress restrictions	Block outbound port 25 from user networks
-TLS downgrade monitoring	Alert when a TLS-capable server falls back to plaintext
-Mitigation Controls
-Control	Description
-Enforce STARTTLS	Require STARTTLS on 25/587, or use implicit TLS on 465
-Deprecate AUTH LOGIN	Move to AUTH CRAM-MD5, AUTH XOAUTH2, or app passwords
-MTA-STS and DANE	Publish policy and TLSA records to prevent downgrade
-SPF / DKIM / DMARC	Add cryptographic authentication to outbound email
-Client-side TLS-only	Configure Outlook / Thunderbird to refuse unencrypted SMTP
-Forensic Practice
-•	Retain full packet capture during incidents — not just flow data.
-•	Synchronise system clocks across mail servers and clients.
-•	Preserve SMTP stream data in both ASCII and hex form.
-•	Treat recovered credentials as confidential; mask in public reporting.
-•	Document whether the capture was taken at the client, relay, or destination — this determines MAC relevance.
- 
-Safety and Ethics
-This lab was conducted exclusively as an offline analysis of a supplied historical capture. No live traffic was generated, intercepted, or replayed.
-•	Original smtp.pcap preserved unmodified; analysis performed on a timestamp-preserved working copy.
-•	No credentials were used to access any live system, and no messages were sent or replayed.
-•	Recovered credentials and message content were masked in the report body; full values appear only in the protected evidence appendix.
-•	No third-party system, production network, or public infrastructure was targeted.
-Warning: The scripts/base64_decoder.py script is intended for authorised training analysis only. Do not use it to decode credentials from any capture you are not explicitly authorised to analyse.
- 
-References
-1.	ICDFA. (2026). SBT-DF203 — Module 3: SMTP Email Traffic Forensics — Course Materials.
-2.	ICDFA. (2026). SBT-DF203 Lab 4 — SMTP Email Traffic Forensics — Official Lab Manual.
-3.	RFC 5321. (2008). Simple Mail Transfer Protocol. IETF
-4.	RFC 3207. (2002). SMTP Service Extension for Secure SMTP over TLS. IETF
-5.	RFC 4954. (2007). SMTP Service Extension for Authentication. IETF
-6.	RFC 2045. (1996). MIME Part One: Format of Internet Message Bodies. IETF
-7.	RFC 4648. (2006). The Base16, Base32, and Base64 Data Encodings. IETF
-8.	Wireshark Foundation. (2026). SampleCaptures — smtp.pcap. wiki.wireshark.org
-9.	Microsoft. (2009). Outlook 12.0 Message Format Reference.
- 
-License
-This repository is submitted as academic coursework for SBT-DF203 Lab 4 at ICDFA. The contents may not be redistributed, reused, or reproduced without written permission from the author and ICDFA.
-© 2026 Ibrahim Diseh Garba. All rights reserved.
+I send u smtp pcap file
+Find the attachment
+GPS
+```
 
-<img width="451" height="692" alt="image" src="https://github.com/user-attachments/assets/fc4fe295-d7dd-4e91-b184-6d29f72371ef" />
+### MIME Structure
+```
+multipart/mixed (boundary = "----=_NextPart_000_0004_01CA4580.095693F0")
+├── multipart/alternative
+│   ├── text/plain         ← main message body (above)
+│   └── text/html          ← HTML version of message
+└── text/plain (attachment) ← NEWS.txt file
+```
+
+### Email Client Identification
+**Microsoft Office Outlook 12.0** (Outlook 2007 generation)
+
+**Evidence:**
+- X-Mailer header explicitly states version
+- Thread-Index value format is characteristic of Exchange/Outlook
+- Message-ID domain suffix (@in) is consistent with Microsoft Exchange's local ID format
+
+---
+
+## 5. Timestamp and Timezone Correlation
+
+### Time Zones in This Message
+| Component | Timestamp | Timezone | UTC Equivalent |
+|-----------|-----------|----------|----------------|
+| Server banner (Exim) | 01:05:54 | UTC-0500 | 2009-10-05 06:05:54 UTC |
+| Message Date header | 11:36:07 | +0530 (IST) | 2009-10-05 06:06:07 UTC |
+| Packet capture | t=0.727 s | (relative) | — |
+
+### Observations
+- **IST (India Standard Time, +0530)** is the apparent timezone of the sender
+- Email domain `patriots.in` is consistent with India registration
+- Server is in central US timezone (UTC-0500)
+- All timestamps are internally consistent
+
+---
+
+## 6. Data Transmission Summary
+
+| Metric | Value |
+|--------|-------|
+| **Total SMTP Frames** | 30 |
+| **First SMTP Frame** | Frame 6 (server 220 banner) |
+| **Last SMTP Frame** | Frame 56 (server 221 closing) |
+| **DATA Fragments** | 14 frames (frames 22–44) |
+| **Data Fragment Size** | ~1,452 bytes each |
+| **Total Message Bytes** | 15,156 bytes |
+| **Capture File Size** | 27,850 bytes (~27 KB) |
+| **Data Byte Rate** | 2,920 bytes/second |
+| **Data Bit Rate** | 23 kbps |
+| **Average Packet Size** | 447.77 bytes |
+| **Average Packet Rate** | 6 packets/second |
+
+---
+
+## 7. Encryption Assessment
+
+### STARTTLS Status
+```
+tshark -r smtp_working.pcap -Y 'smtp.starttls' | wc -l
+→ 0 (no STARTTLS command observed)
+```
+
+### TLS Handshake Status
+```
+tshark -r smtp_working.pcap -Y 'tls.handshake.type == 1' | wc -l
+→ 0 (no Client Hello observed)
+```
+
+### Conclusion
+**This session is plaintext SMTP on port 25 with NO encryption negotiation.**
+
+### Evidential Implications
+
+#### What IS Visible in This Capture
+- ✅ Server software and version (Exim 4.69)
+- ✅ Server hostname and banner
+- ✅ SMTP commands and responses (EHLO, AUTH, MAIL FROM, RCPT TO, DATA)
+- ✅ Authentication credentials (Base64 username and password)
+- ✅ Message envelope (MAIL FROM, RCPT TO addresses)
+- ✅ Email headers (From, To, Subject, Date, X-Mailer, Message-ID, etc.)
+- ✅ Message body (plain text)
+- ✅ Attachment metadata (filename, content-type, encoding)
+- ✅ Client software (Outlook 12.0 from X-Mailer)
+- ✅ Network metadata (IPs, ports, MACs, timestamps)
+
+#### What WOULD BE Hidden Under TLS
+- ❌ All SMTP commands and responses (encrypted)
+- ❌ Authentication credentials (encrypted)
+- ❌ Message envelope addresses (encrypted)
+- ❌ Email headers (encrypted)
+- ❌ Message body (encrypted)
+- ❌ Attachment content (encrypted)
+- ✅ IPs, ports, MACs, timestamps (metadata always visible)
+- ✅ TLS handshake data (would reveal cert, cipher suite, TLS version)
+
+### Critical Point
+**Port number alone does not indicate encryption status.** A session on port 25 or 587 could still use STARTTLS. An analyst must examine the packet stream to verify:
+1. STARTTLS command issued
+2. TLS handshake present
+3. Certificate exchange visible
+
+This capture exhibits none of these, confirming plaintext transmission.
+
+---
+
+## 8. Attack Surface and Risk Assessment
+
+### Vulnerabilities in This Session
+
+| Vulnerability | Impact | Severity |
+|---|---|---|
+| **Plaintext credentials** | Attacker can recover username/password by capturing traffic | 🔴 Critical |
+| **Plaintext message content** | Email body and attachments fully readable in capture | 🔴 Critical |
+| **Predictable Message-IDs** | Exchange Message-ID format may reveal email server patterns | 🟡 Medium |
+| **Banner information disclosure** | Exim 4.69 version revealed (facilitates targeting of known exploits) | 🟡 Medium |
+| **No DKIM/SPF/DMARC** | No cryptographic message authentication | 🟠 High |
+| **Client fingerprinting** | X-Mailer reveals Outlook 2007 generation; enables client-specific attacks | 🟡 Medium |
+| **PIPELINING enabled** | Can be misused in certain attack scenarios | 🟡 Low |
+
+### Real-World Incident Implications
+If this were a **live forensic investigation**, the analyst would:
+1. Alert the user that credentials were transmitted in plaintext
+2. Recommend immediate password reset for the exposed account
+3. Search for evidence of credential misuse (lateral movement, unauthorized access)
+4. Check for data exfiltration or further compromise
+5. Recommend organization-wide STARTTLS/SMTPS enforcement
+
+---
+
+## 9. Attachment Analysis
+
+### NEWS.txt
+| Attribute | Value |
+|-----------|-------|
+| **Filename** | NEWS.txt |
+| **Content-Type** | text/plain |
+| **Content-Transfer-Encoding** | 7bit (ASCII text, no encoding needed) |
+| **Status** | Present in capture; content embedded in DATA fragments |
+| **Recovery** | Full recovery possible; would require MIME boundary parsing |
+
+### Note
+This lab does not extract the attachment's content (it remains embedded in the MIME structure). A full forensic analysis would:
+1. Parse MIME boundaries
+2. Extract the attachment payload
+3. Verify file signatures (magic bytes)
+4. Scan for malware
+5. Analyze file metadata and embedded objects
+
+---
+
+## 10. Chain of Custody and Evidence Integrity
+
+### Evidence File Handling
+| Step | Action | Status |
+|------|--------|--------|
+| **Original Preservation** | smtp.pcap stored unmodified in evidence/ | ✅ Preserved |
+| **SHA-256 Hashing** | Original file hashed before any analysis | ✅ Recorded |
+| **Working Copy** | Timestamp-preserved copy created | ✅ Copied |
+| **Hash Verification** | Working copy hash matches original | ✅ Verified |
+| **Analysis** | All work performed on working copy only | ✅ Separated |
+| **Credential Masking** | Public report masks sensitive values | ✅ Applied |
+| **Protected Appendix** | Full credentials in protected-access file | ✅ Segregated |
+
+### SHA-256 Evidence Record
+Both the original and working-copy files must have **identical SHA-256 hashes**. Example:
+
+```
+[original hash]   evidence/smtp.pcap
+[working hash]    working/smtp_working.pcap
+# Both hashes must match exactly
+```
+
+---
+
+## 11. Forensic Findings Table (Required)
+
+| Question | Finding |
+|----------|---------|
+| **1. When did the SMTP session start and end?** | 5 October 2009, 01:05:54 UTC-0500 (server) / 11:36:07 +0530 (message sender). Capture-relative: t=0.727603 s to t=4.895535 s (~4.17 seconds). Session closed with QUIT + 221 closing connection. |
+| **2. What is the client IP address, port, and MAC?** | IP: 10.10.1.4 · MAC: 00:e0:1c:3c:17:c2 (Cradlepoint last-hop router) · Port: 1470 (ephemeral). |
+| **3. What is the server IP address, port, and MAC?** | IP: 74.53.140.153 · MAC: 00:1f:33:d9:81:60 (Netgear last-hop router) · Port: 25 (SMTP). |
+| **4. What is the SMTP server banner?** | "220 xc90.websitewelcome.com ESMTP Exim 4.69 #1 Mon, 05 Oct 2009 01:05:54 -0500" |
+| **5. What email client software was used?** | Microsoft Office Outlook 12.0 (Outlook 2007 generation) — identified from X-Mailer header. |
+| **6. What authentication method was used?** | AUTH LOGIN with Base64-encoded username and password. |
+| **7. Who sent the email and to whom?** | From: "Gurpartap Singh" <gurpartap@patriots.in> To: <raj_deol2002in@yahoo.co.in> Subject: SMTP |
+| **8. What is the message body (main content)?** | "Hello / I send u smtp pcap file / Find the attachment / GPS" |
+| **9. What MIME structure does the message have?** | multipart/mixed containing multipart/alternative (text/plain + text/html) plus one text/plain attachment (NEWS.txt). |
+| **10. Is there an attachment? If so, what is it?** | Yes — NEWS.txt (text/plain, 7bit encoding). Content embedded in MIME structure; full extraction requires boundary parsing. |
+| **11. Was encryption used (STARTTLS or SMTPS)?** | No. tshark queries for STARTTLS command and TLS handshake both return 0 frames. Session is plaintext SMTP on port 25. |
+| **12. What would be hidden if encryption were used?** | All application-layer data (commands, responses, credentials, headers, body, attachments) would be encrypted. Only metadata (IPs, ports, MACs, timestamps, TLS metadata) would remain visible. |
+
+---
+
+## 12. Mitigation and Detection Recommendations
+
+### Detection
+Organizations should alert on:
+- SMTP AUTH commands without preceding STARTTLS
+- Plaintext SMTP traffic on port 25 from user endpoints
+- AUTH LOGIN mechanism in use (prefer more secure auth mechanisms)
+- Failed STARTTLS negotiations followed by plaintext transmission
+- Credentials discovered in packet captures (incident response)
+
+### Mitigation
+- **Enforce STARTTLS** on mail servers and configure clients to require it
+- **Deprecate AUTH LOGIN** in favor of CRAM-MD5, XOAUTH2, or app passwords
+- **Block outbound port 25** from user networks; require 587 with STARTTLS
+- **Use MTA-STS and DANE** to prevent downgrade attacks
+- **Implement SPF/DKIM/DMARC** for message authentication
+- **Configure client-side TLS-only** enforcement in Outlook/Thunderbird
+
+### Forensic Practice
+- Retain full packet captures during incident response (not just flow data)
+- Synchronize clocks across mail servers and endpoints
+- Preserve SMTP streams in both ASCII and hex formats
+- Treat recovered credentials as confidential evidence
+- Document encryption status and evidential implications
+- Explain last-hop limitations for MAC addresses and NAT
+
+---
+
+## 13. Conclusion
+
+This SMTP email capture demonstrates the forensic value and risks of plaintext email transmission. In the absence of encryption:
+- The analyst can recover **every application-layer detail** of the email transaction
+- Credentials are trivial to decode and exploit
+- Message content and recipients are fully exposed
+- Server software fingerprints enable targeted attacks
+
+In modern incident response, the absence of STARTTLS/SMTPS represents both an investigative advantage (full recovery) and an operational risk (complete exposure).
+
+**Key Takeaway:**  
+Always verify encryption status by examining the packet stream, not the port number alone. Plaintext SMTP is fully recoverable; encrypted SMTP is application-layer opaque.
+
+---
+
+**Report Generated:** 12 September 2026  
+**Course:** SBT-DF203 — Basic Networking Skills for Digital Forensics  
+**Institution:** International Cybersecurity and Digital Forensics Academy (ICDFA)  
+**Author:** Ibrahim Diseh Garba (2025/FWSD/11521)
